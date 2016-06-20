@@ -1,0 +1,126 @@
+plugins {
+    id "de.undercouch.download" version "2.1.0"
+}
+
+import de.undercouch.gradle.tasks.download.Download
+
+ext {
+    buildDir = 'build'
+    scaOutputDir = 'build/logs'
+    sourceDir = 'src'
+    phpunitConfig = 'phpunit.xml'
+    artifactName = 'gitlist'
+}
+
+task clean << {
+    delete 'build'
+}
+
+task makeDirectories << {
+    mkdir(buildDir)
+    mkdir(scaOutputDir)
+}
+
+task installComposer(type:Exec, dependsOn: makeDirectories, description: "Install composer"){
+    outputs.files file('composer.phar')
+    
+    executable "php"
+    args "$buildDir/installer", "--disable-tls"
+
+    doFirst {
+        download {
+            src "https://getcomposer.org/installer"
+            dest "$buildDir" 
+        }
+    }
+}
+
+task composerInstall (type : Exec, dependsOn : installComposer, description : "Run composer install"){
+    executable "php"
+    args "composer.phar", "install"
+}
+
+task composerUpdate (type : Exec, dependsOn : installComposer, description : "Run composer update"){
+    executable "php"
+    args "composer.phar", "update"
+}
+
+FileTree tree = fileTree(dir: sourceDir)
+tree.include "**/*.php"
+def executableExt = System.properties["os.name"].toLowerCase().contains("windows") ? ".bat" : ""
+def vendorBinDir = "./vendor/bin"
+def scaCmdTemplate = { cmd -> vendorBinDir + '/' + cmd + executableExt}
+
+task lint << {
+    tree.each { File file ->
+        exec {
+            commandLine "php", "-l", "$file"
+        }
+    }
+}
+
+task phploc(type : Exec, description : "Measure project size using PHPLOC"){
+    executable scaCmdTemplate(name)
+	args "--log-csv", "build/logs/phploc.csv", sourceDir
+}
+
+task pdepend(type : Exec, description : "Calculate software metrics using PHP_Depend"){
+    executable scaCmdTemplate(name)
+	args "--jdepend-chart=build/logs/pdepend.html", sourceDir
+}
+
+task phpmd (type : Exec, description : "Perform project mess detection using PHPMD, and Creating a log file for the Continuous Integration Server"){
+    executable scaCmdTemplate(name)
+	args sourceDir, "xml", "codesize", "--reportfile", "build/logs/phpmd.xml", "--suffixes", ".php"
+}
+
+task phpcpd (type : Exec, description : "Find Duplicate code using PHPCPD"){
+    executable scaCmdTemplate(name)
+	args "--log-pmd", "build/logs/phpcpd.xml", sourceDir
+} 
+
+task phpunit (type : Exec, description : "Run unit tests with PHPUnit"){
+    executable scaCmdTemplate(name)
+	args "-c", phpunitConfig
+}
+
+task phpcs (type : Exec, description : "Find Coding Standard Violations using PHP_CodeSniffer & Creating a log file for the Continuous Integration Server"){
+    executable scaCmdTemplate(name)
+	args "--report=xml", "--report-file=build/logs/phpcs.xml" , sourceDir, "--runtime-set", "ignore_errors_on_exit", "1", "--runtime-set", "ignore_warnings_on_exit", "1"
+}
+
+task build (dependsOn : [composerInstall, lint, phploc, pdepend, phpcpd, phpmd, phpcs, phpunit])
+phploc.mustRunAfter composerInstall
+pdepend.mustRunAfter composerInstall
+phpmd.mustRunAfter composerInstall
+phpcpd.mustRunAfter composerInstall
+phpunit.mustRunAfter composerInstall
+phpcs.mustRunAfter composerInstall
+
+
+/* Packaging */
+def distDir = 'build/dist'
+def artifactDir = "$distDir/$artifactName"
+task prepareDist (type : Copy, description: "Populate all files that will be deployed into one folder"){
+    mkdir(artifactDir)
+    from "$projectDir"
+    exclude ".gradle", "cache", "build", 
+    "tests", "pkg_builder", "phpunit.xml.dist", 
+    "cache.properties", ".gitignore", ".travis.yml", 
+    "build.xml", "composer.json", "composer.lock", 
+    "config.ini", "composer.phar", "build.gradle", 
+    "INSTALL.md", "README.md", "LICENSE.txt"
+    into artifactDir
+}
+
+task dist (type : Zip, dependsOn : prepareDist){
+    from artifactDir
+    destinationDir = file(distDir)
+    baseName = artifactName
+}
+
+if (tasks.findByPath('wrapper') == null) {
+    task wrapper (type: Wrapper) {
+        gradleVersion= '2.4'
+    }
+}

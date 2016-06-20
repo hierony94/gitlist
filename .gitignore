@@ -32,3 +32,5 @@ config.ini
 cache.properties
 composer.phar
 phpunit.xml
+
+.gradle
